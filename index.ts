@@ -1,52 +1,46 @@
-import * as core from "@actions/core";
-import { exec } from "@actions/exec";
-import * as github from "@actions/github";
-import fs from "fs-extra";
-import getWorkspaces, { Workspace } from "get-workspaces";
-import path from "path";
+import * as core from '@actions/core';
+import { exec } from '@actions/exec';
+import * as github from '@actions/github';
+import fs from 'fs-extra';
+import getWorkspaces, { Workspace } from 'get-workspaces';
+import path from 'path';
 import {
   getChangelogEntry,
   execWithOutput,
   getChangedPackages,
-  sortTheThings
-} from "./utils";
-import * as semver from "semver";
-import { readPreState } from "@changesets/pre";
-import readChangesets from "@changesets/read";
+  sortTheThings,
+} from './utils';
+import * as semver from 'semver';
+import { readPreState } from '@changesets/pre';
+import readChangesets from '@changesets/read';
 
 (async () => {
   let githubToken = process.env.GITHUB_TOKEN;
 
   if (!githubToken) {
-    core.setFailed("Please add the GITHUB_TOKEN to the changesets action");
+    core.setFailed('Please add the GITHUB_TOKEN to the changesets action');
     return;
   }
   let repo = `${github.context.repo.owner}/${github.context.repo.repo}`;
-  let branch = github.context.ref.replace("refs/heads/", "");
+  let branch = github.context.ref.replace('refs/heads/', '');
   let preState = await readPreState(process.cwd());
 
-  let isInPreMode = preState !== undefined && preState.mode === "pre";
+  let isInPreMode = preState !== undefined && preState.mode === 'pre';
+
+  let userName = core.getInput('userName') || 'github-actions[bot]';
+  let email =
+    core.getInput('email') || 'github-actions[bot]@users.noreply.github.com';
 
   const octokit = new github.GitHub(githubToken);
 
-  console.log("setting git user");
-  await exec("git", [
-    "config",
-    "--global",
-    "user.name",
-    `"github-actions[bot]"`
-  ]);
-  await exec("git", [
-    "config",
-    "--global",
-    "user.email",
-    `"github-actions[bot]@users.noreply.github.com"`
-  ]);
+  console.log('setting git user');
+  await exec('git', ['config', '--global', 'user.name', `"${userName}"`]);
+  await exec('git', ['config', '--global', 'user.email', `"${email}"`]);
 
-  console.log("setting GitHub credentials");
+  console.log('setting GitHub credentials');
   await fs.writeFile(
     `${process.env.HOME}/.netrc`,
-    `machine github.com\nlogin github-actions[bot]\npassword ${githubToken}`
+    `machine github.com\nlogin ${userName}\npassword ${githubToken}`,
   );
 
   let changesets = await readChangesets(process.cwd());
@@ -58,46 +52,46 @@ import readChangesets from "@changesets/read";
 
   let hasChangesets = changesets.length !== 0;
 
-  let publishScript = core.getInput("publish");
+  let publishScript = core.getInput('publish');
 
   if (!hasChangesets && !publishScript) {
-    console.log("No changesets found");
+    console.log('No changesets found');
     return;
   }
   if (!hasChangesets && publishScript) {
     console.log(
-      "No changesets found, attempting to publish any unpublished packages to npm"
+      'No changesets found, attempting to publish any unpublished packages to npm',
     );
     let workspaces = await getWorkspaces({
-      tools: ["yarn", "bolt", "pnpm", "root"]
+      tools: ['yarn', 'bolt', 'pnpm', 'root'],
     });
 
     if (!workspaces) {
-      return core.setFailed("Could not find workspaces");
+      return core.setFailed('Could not find workspaces');
     }
 
     let workspacesByName = new Map(workspaces.map(x => [x.name, x]));
 
     fs.writeFileSync(
       `${process.env.HOME}/.npmrc`,
-      `//registry.npmjs.org/:_authToken=${process.env.NPM_TOKEN}`
+      `//registry.npmjs.org/:_authToken=${process.env.NPM_TOKEN}`,
     );
 
     let [publishCommand, ...publishArgs] = publishScript.split(/\s+/);
 
     let changesetPublishOutput = await execWithOutput(
       publishCommand,
-      publishArgs
+      publishArgs,
     );
-    await exec("git", ["pull", "origin", branch]);
+    await exec('git', ['pull', 'origin', branch]);
 
-    await exec("git", ["push", "origin", `HEAD:${branch}`, "--tags"]);
+    await exec('git', ['push', 'origin', `HEAD:${branch}`, '--tags']);
 
     let newTagRegex = /New tag:\s+(@[^/]+\/[^@]+|[^/]+)@([^\s]+)/;
 
     let releasedWorkspaces: Workspace[] = [];
 
-    for (let line of changesetPublishOutput.stdout.split("\n")) {
+    for (let line of changesetPublishOutput.stdout.split('\n')) {
       let match = line.match(newTagRegex);
       if (match === null) {
         continue;
@@ -106,9 +100,9 @@ import readChangesets from "@changesets/read";
       let workspace = workspacesByName.get(pkgName);
       if (workspace === undefined) {
         return core.setFailed(
-          "Workspace not found for " +
+          'Workspace not found for ' +
             pkgName +
-            ". This is probably a bug in the action, please open an issue"
+            '. This is probably a bug in the action, please open an issue',
         );
       }
       releasedWorkspaces.push(workspace);
@@ -117,35 +111,35 @@ import readChangesets from "@changesets/read";
     await Promise.all(
       releasedWorkspaces.map(async workspace => {
         try {
-          let changelogFileName = path.join(workspace.dir, "CHANGELOG.md");
+          let changelogFileName = path.join(workspace.dir, 'CHANGELOG.md');
 
-          let changelog = await fs.readFile(changelogFileName, "utf8");
+          let changelog = await fs.readFile(changelogFileName, 'utf8');
 
           let changelogEntry = getChangelogEntry(
             changelog,
-            workspace.config.version
+            workspace.config.version,
           );
           if (!changelogEntry) {
             // we can find a changelog but not the entry for this version
             // if this is true, something has probably gone wrong
             return core.setFailed(
-              `Could not find changelog entry for ${workspace.name}@${workspace.config.version}`
+              `Could not find changelog entry for ${workspace.name}@${workspace.config.version}`,
             );
           }
 
           await octokit.repos.createRelease({
             tag_name: `${workspace.name}@${workspace.config.version}`,
             body: changelogEntry.content,
-            prerelease: workspace.config.version.includes("-"),
-            ...github.context.repo
+            prerelease: workspace.config.version.includes('-'),
+            ...github.context.repo,
           });
         } catch (err) {
           // if we can't find a changelog, the user has probably disabled changelogs
-          if (err.code !== "ENOENT") {
+          if (err.code !== 'ENOENT') {
             throw err;
           }
         }
-      })
+      }),
     );
 
     return;
@@ -153,27 +147,27 @@ import readChangesets from "@changesets/read";
 
   if (hasChangesets) {
     let versionBranch = `changeset-release/${branch}`;
-    let { stderr } = await execWithOutput("git", ["checkout", versionBranch], {
-      ignoreReturnCode: true
+    let { stderr } = await execWithOutput('git', ['checkout', versionBranch], {
+      ignoreReturnCode: true,
     });
     let isCreatingChangesetReleaseBranch = !stderr
       .toString()
       .includes(`Switched to a new branch '${versionBranch}'`);
     if (isCreatingChangesetReleaseBranch) {
-      await exec("git", ["checkout", "-b", versionBranch]);
+      await exec('git', ['checkout', '-b', versionBranch]);
     }
 
-    await exec("git", ["reset", "--hard", github.context.sha]);
+    await exec('git', ['reset', '--hard', github.context.sha]);
     let changesetsCliPkgJson = await fs.readJson(
-      path.join("node_modules", "@changesets", "cli", "package.json")
+      path.join('node_modules', '@changesets', 'cli', 'package.json'),
     );
-    let cmd = semver.lt(changesetsCliPkgJson.version, "2.0.0")
-      ? "bump"
-      : "version";
-    await exec("node", ["./node_modules/@changesets/cli/bin.js", cmd]);
+    let cmd = semver.lt(changesetsCliPkgJson.version, '2.0.0')
+      ? 'bump'
+      : 'version';
+    await exec('node', ['./node_modules/@changesets/cli/bin.js', cmd]);
     let searchQuery = `repo:${repo}+state:open+head:${versionBranch}+base:${branch}`;
     let searchResultPromise = octokit.search.issuesAndPullRequests({
-      q: searchQuery
+      q: searchQuery,
     });
     let changedWorkspaces = await getChangedPackages(process.cwd());
 
@@ -193,7 +187,7 @@ ${
 
 ⚠️⚠️⚠️⚠️⚠️⚠️
 `
-    : ""
+    : ''
 }
 # Releases
 ` +
@@ -201,60 +195,60 @@ ${
           await Promise.all(
             changedWorkspaces.map(async workspace => {
               let changelogContents = await fs.readFile(
-                path.join(workspace.dir, "CHANGELOG.md"),
-                "utf8"
+                path.join(workspace.dir, 'CHANGELOG.md'),
+                'utf8',
               );
 
               let entry = getChangelogEntry(
                 changelogContents,
-                workspace.config.version
+                workspace.config.version,
               );
               return {
                 highestLevel: entry.highestLevel,
                 private: !!workspace.config.private,
                 content:
                   `## ${workspace.name}@${workspace.config.version}\n\n` +
-                  entry.content
+                  entry.content,
               };
-            })
+            }),
           )
         )
           .filter(x => x)
           .sort(sortTheThings)
           .map(x => x.content)
-          .join("\n ")
+          .join('\n ')
       );
     })();
 
     const prTitle = `Version Packages${
-      isInPreMode ? ` (${preState.tag})` : ""
+      isInPreMode ? ` (${preState.tag})` : ''
     }`;
     const commitMsg = `ci(changeset): generate PR with changelog &${
-      isInPreMode ? ` (${preState.tag})` : ""
+      isInPreMode ? ` (${preState.tag})` : ''
     } version updates`;
 
-    await exec("git", ["add", "."]);
-    await exec("git", ["commit", "-m", commitMsg]);
-    await exec("git", ["push", "origin", versionBranch, "--force"]);
+    await exec('git', ['add', '.']);
+    await exec('git', ['commit', '-m', commitMsg]);
+    await exec('git', ['push', 'origin', versionBranch, '--force']);
     let searchResult = await searchResultPromise;
     console.log(JSON.stringify(searchResult.data, null, 2));
     if (searchResult.data.items.length === 0) {
-      console.log("creating pull request");
+      console.log('creating pull request');
       await octokit.pulls.create({
         base: branch,
         head: versionBranch,
         title: prTitle,
         body: await prBodyPromise,
-        ...github.context.repo
+        ...github.context.repo,
       });
     } else {
       octokit.pulls.update({
         pull_number: searchResult.data.items[0].number,
         title: prTitle,
         body: await prBodyPromise,
-        ...github.context.repo
+        ...github.context.repo,
       });
-      console.log("pull request found");
+      console.log('pull request found');
     }
   }
 })().catch(err => {
